@@ -1,16 +1,102 @@
 # Deploy a File Scanner for Sensitive Data in 40 Lines of Code
 
-#### In this tutorial, we will create and deploy a server that scans files for sensitive data (like credit card numbers) with Nightfall's data loss prevention APIs and the Flask framework. 
+#### In this tutorial, we will create and deploy a server that scans files for sensitive data (like credit card numbers) with Nightfall's data loss prevention APIs and the Flask framework.
 
 The service ingests a local file, scans it for sensitive data with Nightfall, and displays the results in a simple table UI. We'll deploy the server on Render (a PaaS Heroku alternative) so that you can serve your application publicly in production instead of running it off your local machine. You'll build familiarity with the following tools and frameworks: Python, Flask, Nightfall, Ngrok, Jinja, Render.
 
 ## Key Concepts
 
-Before we get started on our implementation, start by familiarizing yourself with [how scanning files works](https://docs.nightfall.ai/docs/scanning-files#prerequisites) with Nightfall, so you're acquainted with the flow we are implementing. 
+Before we get started on our implementation, start by familiarizing yourself with [how scanning files works](https://docs.nightfall.ai/docs/scanning-files#prerequisites) with Nightfall. In a nutshell, file scanning is asynchronous. After you upload a file to Nightfall and trigger the scan, Nightfall performs the scan in the background and notifies you via a webhook once the scan is complete.
 
-In a nutshell, file scanning is done asynchronously by Nightfall; after you upload a file to Nightfall and trigger the scan, we perform the scan in the background. When the scan completes, Nightfall delivers the results to you by making a request to your webhook server. This asynchronous behavior allows Nightfall to scan files of varying sizes and complexities without requiring you to hold open a long synchronous request, or continuously poll for updates. The impact of this pattern is that you need a webhook endpoint that can receive inbound notifications from Nightfall when scans are completed - that's what we are building in this tutorial.
+This tutorial builds a client-server architecture:
+1. Client: A Python script that triggers a file scan.
+2. Server: A Flask app that:
+- Handles scan requests from the client.
+- Receives webhook notifications from Nightfall with scan results.
+- Displays findings in a browser-friendly table.
 
-## Getting Started
+## Client-Server Architecture
+1. Client Script
+The client ('client.py') acts as a lightweight interface for triggering file scans. It:
+- Sends a POST request to the server's '/scan-request' endpoint, specifying the file to scan.
+- Prints the scan ID and confirmation message from the server.
+
+Example Client Code ('client.py')
+```
+import requests
+
+server_url = "https://<your-ngrok-url>.ngrok.io/scan-request"  # Replace with your ngrok URL
+filepath = "sample-pci-xs.csv"  # The file to scan
+
+response = requests.post(server_url, json={"filepath": filepath})
+
+if response.status_code == 200:
+    data = response.json()
+    print(f"Scan ID: {data['scan_id']}")
+    print(f"Message: {data['message']}")
+else:
+    print(f"Error: Status Code {response.status_code}")
+    print("Response Text:", response.text)
+
+```
+
+2. Server Code
+The Flask server ('app.py') manages the following:
+- /scan-request: Processes client requests to initiate file scans. It sends the scan request to Nightfall, specifying the '/ingest' webhook URL to receive results.
+- /ingest: Receives webhook notifications from Nightfall with scan results. Validates the notification and logs or displays findings.
+- /view: Displays findings in a browser-friendly HTML table (optional).
+
+Example Server Code ('app.py')
+```
+from flask import Flask, request
+import os
+from nightfall import Nightfall
+
+app = Flask(__name__)
+nightfall = Nightfall(key=os.getenv("NIGHTFALL_API_KEY"), signing_secret=os.getenv("NIGHTFALL_SIGNING_SECRET"))
+
+@app.route("/scan-request", methods=["POST"])
+def scan_request():
+    data = request.get_json()
+    filepath = data.get("filepath")
+    webhook_url = f"{os.getenv('NIGHTFALL_SERVER_URL')}/ingest"
+    scan_id, message = nightfall.scan_file(filepath, webhook_url=webhook_url)
+    return {"scan_id": scan_id, "message": message}, 200
+
+@app.route("/ingest", methods=["POST"])
+def ingest():
+    data = request.get_json()
+    if data.get("challenge"):
+        return data["challenge"]
+    # Validate webhook, process findings
+    return "", 200
+
+```
+
+## How to Run Locally
+1. Start the Server
+- Run the Flask server locally:
+```
+waitress-serve --port=8000 app:app
+```
+- Expose the server to the internet using ngrok:
+```
+ngrok http 8000
+```
+- Set the ngrok HTTPS URL as an environment variable:
+```
+export NIGHTFALL_SERVER_URL=https://<your-ngrok-url>.ngrok.io
+```
+
+2. Test the Server
+- Run the client script to initiate a scan:
+```
+python client.py
+```
+- Check the server logs to confirm that the '/ingest' endpoint processes the webhook from Nightfall.
+
+------------------------------------------------------------------------------------------------------
+## Begins Nightfall File Scanner
 
 You can fork the sample repo and view the complete code [here](https://github.com/nightfallai/file-scanner-tutorial), or follow along below. If you're starting from scratch, create a new GitHub repository.
 
